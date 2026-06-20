@@ -56,7 +56,7 @@ def test_queued_event_is_published_without_analysis(client):
     body = json.dumps(payload).encode()
 
     resp = test_client.post(
-        "/github",
+        "/webhooks/github",
         data=body,
         headers={
             "X-Hub-Signature-256": _sign(body),
@@ -77,7 +77,7 @@ def test_completed_success_is_published_without_analysis(client):
     body = json.dumps(payload).encode()
 
     resp = test_client.post(
-        "/github",
+        "/webhooks/github",
         data=body,
         headers={
             "X-Hub-Signature-256": _sign(body),
@@ -92,7 +92,7 @@ def test_completed_failure_requires_analysis(client):
     body = json.dumps(payload).encode()
 
     resp = test_client.post(
-        "/github",
+        "/webhooks/github",
         data=body,
         headers={
             "X-Hub-Signature-256": _sign(body),
@@ -106,7 +106,7 @@ def test_non_workflow_run_event_not_published(client):
     body = json.dumps({"action": "opened"}).encode()
 
     resp = test_client.post(
-        "/github",
+        "/webhooks/github",
         data=body,
         headers={
             "X-Hub-Signature-256": _sign(body),
@@ -121,7 +121,7 @@ def test_empty_webhook_secret_rejects_all_traffic(client, monkeypatch):
     webhooks_mod.settings.GITHUB_WEBHOOK_SECRET = ""
 
     resp = test_client.post(
-        "/github",
+        "/webhooks/github",
         data=b"{}",
         headers={"X-GitHub-Event": "workflow_run"},
     )
