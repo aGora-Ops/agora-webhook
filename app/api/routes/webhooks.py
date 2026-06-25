@@ -12,6 +12,7 @@ router = APIRouter()
 
 _publisher = SQSPublisher()
 
+
 @router.post("/github")
 async def receive_github_webhook(
     request: Request,
@@ -21,12 +22,9 @@ async def receive_github_webhook(
     """
     Receive and process GitHub webhook events.
 
-    1. Refuses to process anything if no webhook secret is configured.
-    2. Reads the raw body and validates the X-Hub-Signature-256 HMAC.
-    3. Forwards every workflow_run event to SQS (queued/in_progress/completed,
-       any conclusion) so the unified runs view stays current. Only completed
-       failures are flagged with requires_analysis=True for the Bedrock pipeline.
-    4. Always returns {"received": true} for accepted events.
+    1. Validates X-Hub-Signature-256 HMAC using the shared webhook secret.
+    2. Routes 'installation' events to SQS so the API can register/remove orgs.
+    3. Forwards every 'workflow_run' event to SQS for the unified runs view.
     """
     if not settings.GITHUB_WEBHOOK_SECRET:
         logger.error("GITHUB_WEBHOOK_SECRET is not configured; rejecting webhook.")
@@ -53,9 +51,53 @@ async def receive_github_webhook(
             detail="Invalid JSON payload",
         )
 
-    if x_github_event != "workflow_run":
+    if x_github_event == "installation":
+        return await _handle_installation(payload)
+
+    if x_github_event == "workflow_run":
+        return await _handle_workflow_run(payload)
+
+    return {"received": True, "published": False}
+
+
+async def _handle_installation(payload: dict) -> dict:
+    """Handle GitHub App installation events.
+
+    'created'  → enqueue org registration so the API worker can upsert the org.
+    'deleted'  → enqueue org removal so the API worker can delete it from DB.
+    Other actions (suspend, unsuspend, new_permissions_accepted) are acked but ignored.
+    """
+    action = payload.get("action")
+    installation = payload.get("installation", {})
+    account = installation.get("account", {})
+    installation_id = installation.get("id")
+    org_login = account.get("login")
+    org_type = account.get("type", "")
+
+    if not installation_id or not org_login:
+        logger.warning("Malformed installation payload: %s", payload)
         return {"received": True, "published": False}
 
+    if org_type != "Organization":
+        # We only track org installations, not personal account installs
+        return {"received": True, "published": False}
+
+    if action in ("created", "deleted"):
+        await _publisher.publish({
+            "event_type": "app_installation",
+            "action": action,
+            "installation_id": installation_id,
+            "org_login": org_login,
+            "org_id": account.get("id"),
+            "avatar_url": account.get("avatar_url"),
+        })
+        logger.info("Published app_installation %s for org %s", action, org_login)
+        return {"received": True, "published": True}
+
+    return {"received": True, "published": False}
+
+
+async def _handle_workflow_run(payload: dict) -> dict:
     run = payload.get("workflow_run", {})
     repo = payload.get("repository", {})
     workflow = payload.get("workflow", {})
@@ -68,9 +110,7 @@ async def receive_github_webhook(
     if not isinstance(run_id, int) or not repo_owner or not repo_name:
         logger.warning(
             "Skipping malformed workflow_run payload (run_id=%r, owner=%r, repo=%r)",
-            run_id,
-            repo_owner,
-            repo_name,
+            run_id, repo_owner, repo_name,
         )
         return {"received": True, "published": False}
 
