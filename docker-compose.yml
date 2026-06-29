@@ -1,9 +1,9 @@
-services:
+﻿services:
   webhook:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: agora-webhook
+    container_name: stagecraft-webhook
     ports:
       - "8001:8001"
     environment:
@@ -21,4 +21,4 @@ services:
 
 networks:
   default:
-    name: agora-webhook-network
+    name: stagecraft-webhook-network
